@@ -1,0 +1,6 @@
+node_modules/
+uploads/
+.idea/
+*.iml
+npm-debug.log*
+config.json

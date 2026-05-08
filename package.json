@@ -1,0 +1,14 @@
+{
+  "name": "oss-sync",
+  "version": "1.0.0",
+  "description": "OSS multi-bucket sync web",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

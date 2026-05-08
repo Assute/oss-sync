@@ -1,0 +1,17 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5300
+  },
+  "oss": {
+    "accessKeyId": "your-access-key-id",
+    "accessKeySecret": "your-access-key-secret",
+    "secure": true
+  },
+  "upload": {
+    "maxFileSizeMB": 100
+  },
+  "list": {
+    "maxKeys": 200
+  }
+}

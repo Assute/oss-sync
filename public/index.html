@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>阿里云 OSS 文件上传</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      background: #f5f7fb;
+      color: #1f2937;
+    }
+    .wrap {
+      max-width: 1080px;
+      margin: 28px auto;
+      padding: 20px 24px 28px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      padding: 24px 28px;
+      margin-bottom: 16px;
+    }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    h1, h2 {
+      margin: 0;
+    }
+    h1 { font-size: 28px; }
+    h2 { font-size: 24px; }
+    .desc {
+      margin: 8px 0 0;
+      color: #6b7280;
+      line-height: 1.7;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      padding: 12px 22px;
+      font-size: 15px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #uploadBtn { background: #1677ff; }
+    #refreshBtn { background: #0f766e; }
+    .mini-btn {
+      padding: 7px 12px;
+      font-size: 13px;
+      border-radius: 8px;
+      min-width: 54px;
+    }
+    .copy-btn { background: #1677ff; }
+    .edit-btn { background: #0f766e; }
+    .delete-btn { background: #dc2626; }
+    button:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+    .status-text {
+      min-height: 0;
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 1.6;
+      word-break: break-all;
+    }
+    .status-text:empty {
+      display: none;
+    }
+    .success { color: #047857; }
+    .error { color: #b91c1c; }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      margin-top: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 780px;
+      background: #fff;
+      table-layout: fixed;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      vertical-align: middle;
+      font-size: 14px;
+    }
+    th { background: #f8fafc; }
+    tr:last-child td { border-bottom: none; }
+    .muted {
+      color: #6b7280;
+      font-size: 13px;
+    }
+    a {
+      color: #1677ff;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .file-name { word-break: break-all; }
+    .col-size,
+    .col-time,
+    .col-actions { text-align: center; }
+    .action-cell { min-width: 220px; }
+    .action-group {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 999;
+    }
+    .modal.show { display: flex; }
+    .modal-card {
+      width: min(900px, 100%);
+      max-height: 90vh;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .modal-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin: 0;
+    }
+    .modal-key {
+      color: #6b7280;
+      word-break: break-all;
+      font-size: 13px;
+    }
+    #editorText {
+      width: 100%;
+      min-height: 420px;
+      resize: vertical;
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 14px;
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .cancel-btn { background: #6b7280; }
+    .save-btn { background: #1677ff; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(15, 23, 42, 0.9);
+      color: #fff;
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.4;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.2);
+      z-index: 1200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>阿里云 OSS 文件上传</h1>
+      <p class="desc">上传时会自动同步到所有存储，列表里只显示一份文件名。</p>
+    </div>
+
+    <div class="card">
+      <div class="header-row">
+        <h2>OSS 文件列表</h2>
+        <div class="actions">
+          <button id="uploadBtn" type="button">上传</button>
+          <button id="refreshBtn" type="button">刷新</button>
+        </div>
+      </div>
+
+      <input id="file" name="file" type="file" hidden>
+      <div id="uploadStatus" class="status-text"></div>
+      <div id="filesStatus" class="status-text"></div>
+
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col style="width: 30%;">
+            <col style="width: 16%;">
+            <col style="width: 24%;">
+            <col style="width: 30%;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>文件路径</th>
+              <th class="col-size">大小</th>
+              <th class="col-time">更新时间</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="filesBody">
+            <tr>
+              <td colspan="4" class="muted">暂无数据</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="editorModal" class="modal">
+    <div class="modal-card">
+      <h3 class="modal-title">编辑文件</h3>
+      <div id="editorKey" class="modal-key"></div>
+      <textarea id="editorText" spellcheck="false"></textarea>
+      <div id="editorStatus" class="status-text"></div>
+      <div class="modal-actions">
+        <button id="cancelEditBtn" class="cancel-btn" type="button">取消</button>
+        <button id="saveEditBtn" class="save-btn" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const filesStatus = document.getElementById('filesStatus');
+    const filesBody = document.getElementById('filesBody');
+    const editorModal = document.getElementById('editorModal');
+    const editorKey = document.getElementById('editorKey');
+    const editorText = document.getElementById('editorText');
+    const editorStatus = document.getElementById('editorStatus');
+    const cancelEditBtn = document.getElementById('cancelEditBtn');
+    const saveEditBtn = document.getElementById('saveEditBtn');
+    const toast = document.getElementById('toast');
+
+    let currentEditKey = '';
+    let currentFiles = [];
+    let toastTimer = null;
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function setUploadStatus(message, type) {
+      uploadStatus.className = 'status-text ' + (type || '');
+      uploadStatus.innerHTML = message || '';
+    }
+
+    function setFilesStatus(message, type) {
+      filesStatus.className = 'status-text ' + (type || '');
+      filesStatus.innerHTML = message || '';
+    }
+
+    function setEditorStatus(message, type) {
+      editorStatus.className = 'status-text ' + (type || '');
+      editorStatus.innerHTML = message || '';
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.classList.add('show');
+      toastTimer = setTimeout(() => {
+        toast.classList.remove('show');
+      }, 1400);
+    }
+
+    function formatSize(size) {
+      const num = Number(size || 0);
+      if (num < 1024) return num + ' B';
+      if (num < 1024 * 1024) return (num / 1024).toFixed(2) + ' KB';
+      if (num < 1024 * 1024 * 1024) return (num / 1024 / 1024).toFixed(2) + ' MB';
+      return (num / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+
+    function formatDate(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return escapeHtml(value);
+      return escapeHtml(date.toLocaleString('zh-CN', { hour12: false }));
+    }
+
+    function renderFiles(files) {
+      currentFiles = Array.isArray(files) ? files : [];
+
+      if (!currentFiles.length) {
+        filesBody.innerHTML = '<tr><td colspan="4" class="muted">当前没有文件</td></tr>';
+        return;
+      }
+
+      filesBody.innerHTML = currentFiles.map(file => {
+        const name = escapeHtml(file.name || '');
+        const keyJson = JSON.stringify(file.name || '');
+        const editDisabled = file.editable ? '' : 'disabled';
+        const editTitle = file.editable ? '' : 'title="该文件类型暂不支持在线编辑"';
+
+        return `
+          <tr>
+            <td class="file-name">${name}</td>
+            <td class="col-size">${formatSize(file.size)}</td>
+            <td class="col-time">${formatDate(file.lastModified)}</td>
+            <td class="action-cell col-actions">
+              <div class="action-group">
+                <button class="mini-btn copy-btn" type="button" onclick='copyFileLink(${keyJson})'>复制</button>
+                <button class="mini-btn edit-btn" type="button" onclick='openEditor(${keyJson})' ${editDisabled} ${editTitle}>编辑</button>
+                <button class="mini-btn delete-btn" type="button" onclick='deleteFile(${keyJson})'>删除</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function setBusy(isBusy) {
+      uploadBtn.disabled = isBusy;
+      refreshBtn.disabled = isBusy;
+    }
+
+    async function loadFiles() {
+      refreshBtn.disabled = true;
+      setFilesStatus('');
+
+      try {
+        const response = await fetch('/api/oss/files');
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || '读取文件列表失败');
+        }
+
+        renderFiles(data.files || []);
+      } catch (error) {
+        setFilesStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
+        filesBody.innerHTML = '<tr><td colspan="4" class="muted">读取失败</td></tr>';
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    }
+
+    async function uploadSelectedFile() {
+      if (!fileInput.files || fileInput.files.length === 0) {
+        return;
+      }
+
+      const file = fileInput.files[0];
+      setBusy(true);
+      setUploadStatus('正在上传并同步，请稍候...');
+
+      try {
+        const response = await fetch('/api/oss/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'X-File-Name': encodeURIComponent(file.name || 'file.bin')
+          },
+          body: file
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || '上传失败');
+        }
+
+        setUploadStatus(`上传成功，已同步到 ${data.syncedBuckets || 0} 个存储：${escapeHtml(data.objectKey || '')}`, 'success');
+        await loadFiles();
+      } catch (error) {
+        setUploadStatus(`上传失败：${escapeHtml(error.message)}`, 'error');
+      } finally {
+        setBusy(false);
+        fileInput.value = '';
+      }
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+
+    async function copyFileLink(key) {
+      try {
+        const item = currentFiles.find(file => file.name === key);
+        if (!item || !Array.isArray(item.urls) || item.urls.length === 0) {
+          throw new Error('未找到文件链接');
+        }
+
+        await copyText(item.urls.join('\n'));
+        showToast(`已复制 ${item.urls.length} 个地址`);
+      } catch (error) {
+        setUploadStatus(`复制失败：${escapeHtml(error.message)}`, 'error');
+      }
+    }
+
+    async function openEditor(key) {
+      try {
+        currentEditKey = key;
+        editorKey.textContent = key;
+        editorText.value = '';
+        setEditorStatus('正在读取文件内容...');
+        editorModal.classList.add('show');
+
+        const response = await fetch(`/api/oss/file?key=${encodeURIComponent(key)}`);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || '读取文件内容失败');
+        }
+
+        editorText.value = data.content || '';
+        setEditorStatus('');
+      } catch (error) {
+        setEditorStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
+      }
+    }
+
+    async function saveEditor() {
+      if (!currentEditKey) {
+        return;
+      }
+
+      saveEditBtn.disabled = true;
+      cancelEditBtn.disabled = true;
+      setEditorStatus('正在保存并同步...');
+
+      try {
+        const response = await fetch('/api/oss/file', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            key: currentEditKey,
+            content: editorText.value
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || '保存失败');
+        }
+
+        setEditorStatus('保存成功', 'success');
+        setUploadStatus(`已同步保存到 ${data.syncedBuckets || 0} 个存储：${escapeHtml(currentEditKey)}`, 'success');
+        await loadFiles();
+      } catch (error) {
+        setEditorStatus(`保存失败：${escapeHtml(error.message)}`, 'error');
+      } finally {
+        saveEditBtn.disabled = false;
+        cancelEditBtn.disabled = false;
+      }
+    }
+
+    async function deleteFile(key) {
+      if (!confirm(`确定删除这个文件？\n${key}`)) {
+        return;
+      }
+
+      try {
+        setUploadStatus('正在删除并同步...');
+        const response = await fetch(`/api/oss/file?key=${encodeURIComponent(key)}`, {
+          method: 'DELETE'
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || '删除失败');
+        }
+
+        setUploadStatus(`删除成功，已同步到 ${data.syncedBuckets || 0} 个存储：${escapeHtml(key)}`, 'success');
+        await loadFiles();
+      } catch (error) {
+        setUploadStatus(`删除失败：${escapeHtml(error.message)}`, 'error');
+      }
+    }
+
+    function closeEditor() {
+      currentEditKey = '';
+      editorModal.classList.remove('show');
+      editorText.value = '';
+      setEditorStatus('');
+    }
+
+    uploadBtn.addEventListener('click', () => {
+      if (!uploadBtn.disabled) {
+        fileInput.click();
+      }
+    });
+
+    fileInput.addEventListener('change', uploadSelectedFile);
+    refreshBtn.addEventListener('click', loadFiles);
+    saveEditBtn.addEventListener('click', saveEditor);
+    cancelEditBtn.addEventListener('click', closeEditor);
+    editorModal.addEventListener('click', event => {
+      if (event.target === editorModal) {
+        closeEditor();
+      }
+    });
+
+    window.copyFileLink = copyFileLink;
+    window.openEditor = openEditor;
+    window.deleteFile = deleteFile;
+
+    loadFiles();
+  </script>
+</body>
+</html>
