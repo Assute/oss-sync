@@ -32,6 +32,11 @@
       flex-wrap: wrap;
       margin-bottom: 12px;
     }
+    .top-bar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 12px;
+    }
     h1, h2 {
       margin: 0;
     }
@@ -194,6 +199,9 @@
 <body>
   <div class="wrap">
     <div class="card">
+      <div class="top-bar">
+        <button id="logoutBtn" type="button">退出</button>
+      </div>
       <h1>阿里云 OSS 文件上传</h1>
       <p class="desc">上传、编辑、删除都会同步到所有存储；复制会按行复制所有地址。</p>
     </div>
@@ -204,7 +212,6 @@
         <div class="actions">
           <button id="uploadBtn" type="button">上传</button>
           <button id="refreshBtn" type="button">刷新</button>
-          <button id="logoutBtn" type="button">退出</button>
         </div>
       </div>
 
