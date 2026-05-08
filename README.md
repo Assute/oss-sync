@@ -2,6 +2,9 @@
 
 阿里云 OSS 多存储同步上传网页，零依赖 Node.js 版。
 
+## 功能
+
+- 账号密码登录
 - 只填 `AccessKeyId` 和 `AccessKeySecret`
 - 自动发现当前账号下的 Bucket
 - 上传时同步到所有 Bucket
@@ -38,6 +41,11 @@ http://127.0.0.1:5300
     "host": "0.0.0.0",
     "port": 5300
   },
+  "auth": {
+    "enabled": true,
+    "username": "admin",
+    "password": "change-this-password"
+  },
   "oss": {
     "accessKeyId": "your-access-key-id",
     "accessKeySecret": "your-access-key-secret",
@@ -52,40 +60,45 @@ http://127.0.0.1:5300
 }
 ```
 
-需要填写：
+### 需要填写
 
+- `auth.username`
+- `auth.password`
 - `oss.accessKeyId`
 - `oss.accessKeySecret`
 
-## 功能
+## 登录说明
 
-### 自动发现 Bucket
+- 访问网站时会先进入登录页
+- 登录成功后才能进入上传和文件管理页面
+- 登录账号和密码来自 `config.json`
 
-程序会自动读取当前账号下的 Bucket 列表。
+## 同步逻辑
 
-### 多存储同步上传
+### 上传
 
-上传一个文件时，会同步写入所有 Bucket。
+上传一个文件时，会自动同步到所有 Bucket。
 
-### 列表聚合
+### 列表
 
-多个 Bucket 中的同名文件，只显示一条文件名。
+多个 Bucket 中的同名文件，只显示一个文件名。
 
-### 复制地址
+### 复制
 
 复制时会把所有存储地址一起复制，格式为一行一个地址。
 
-如果某个 Bucket 开启了传输加速，复制地址时会优先使用加速地址。
+如果某个 Bucket 开启了传输加速，复制时会优先使用加速地址。
 
-### 编辑 / 删除同步
+### 编辑 / 删除
 
-- 编辑保存：同步到所有存储
+- 编辑保存：同步保存到所有存储
 - 删除文件：同步删除所有存储中的同名文件
 
-## 项目文件
+## 文件
 
 - `server.js`：零依赖后端，直接调用 OSS REST API
-- `public/index.html`：前端页面
+- `public/index.html`：主页面
+- `public/login.html`：登录页面
 - `config.example.json`：配置示例
 - `config.json`：你本地自己的配置，已加入 `.gitignore`
 

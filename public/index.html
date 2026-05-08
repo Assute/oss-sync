@@ -59,6 +59,7 @@
     }
     #uploadBtn { background: #1677ff; }
     #refreshBtn { background: #0f766e; }
+    #logoutBtn { background: #6b7280; }
     .mini-btn {
       padding: 7px 12px;
       font-size: 13px;
@@ -110,17 +111,8 @@
       color: #6b7280;
       font-size: 13px;
     }
-    a {
-      color: #1677ff;
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
     .file-name { word-break: break-all; }
-    .col-size,
-    .col-time,
-    .col-actions { text-align: center; }
+    .col-size, .col-time, .col-actions { text-align: center; }
     .action-cell { min-width: 220px; }
     .action-group {
       display: flex;
@@ -203,7 +195,7 @@
   <div class="wrap">
     <div class="card">
       <h1>阿里云 OSS 文件上传</h1>
-      <p class="desc">上传时会自动同步到所有存储，列表里只显示一份文件名。</p>
+      <p class="desc">上传、编辑、删除都会同步到所有存储；复制会按行复制所有地址。</p>
     </div>
 
     <div class="card">
@@ -212,6 +204,7 @@
         <div class="actions">
           <button id="uploadBtn" type="button">上传</button>
           <button id="refreshBtn" type="button">刷新</button>
+          <button id="logoutBtn" type="button">退出</button>
         </div>
       </div>
 
@@ -264,6 +257,7 @@
     const fileInput = document.getElementById('file');
     const uploadBtn = document.getElementById('uploadBtn');
     const refreshBtn = document.getElementById('refreshBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
     const uploadStatus = document.getElementById('uploadStatus');
     const filesStatus = document.getElementById('filesStatus');
     const filesBody = document.getElementById('filesBody');
@@ -286,6 +280,21 @@
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    async function requestJson(url, options) {
+      const response = await fetch(url, options);
+      let data = {};
+      try {
+        data = await response.json();
+      } catch {}
+
+      if (response.status === 401) {
+        window.location.href = '/login.html';
+        throw new Error('未登录');
+      }
+
+      return { response, data };
     }
 
     function setUploadStatus(message, type) {
@@ -361,6 +370,7 @@
     function setBusy(isBusy) {
       uploadBtn.disabled = isBusy;
       refreshBtn.disabled = isBusy;
+      logoutBtn.disabled = isBusy;
     }
 
     async function loadFiles() {
@@ -368,16 +378,16 @@
       setFilesStatus('');
 
       try {
-        const response = await fetch('/api/oss/files');
-        const data = await response.json();
+        const { response, data } = await requestJson('/api/oss/files');
         if (!response.ok || !data.success) {
           throw new Error(data.message || '读取文件列表失败');
         }
-
         renderFiles(data.files || []);
       } catch (error) {
-        setFilesStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
-        filesBody.innerHTML = '<tr><td colspan="4" class="muted">读取失败</td></tr>';
+        if (error.message !== '未登录') {
+          setFilesStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
+          filesBody.innerHTML = '<tr><td colspan="4" class="muted">读取失败</td></tr>';
+        }
       } finally {
         refreshBtn.disabled = false;
       }
@@ -393,7 +403,7 @@
       setUploadStatus('正在上传并同步，请稍候...');
 
       try {
-        const response = await fetch('/api/oss/upload', {
+        const { response, data } = await requestJson('/api/oss/upload', {
           method: 'POST',
           headers: {
             'Content-Type': file.type || 'application/octet-stream',
@@ -402,7 +412,6 @@
           body: file
         });
 
-        const data = await response.json();
         if (!response.ok || !data.success) {
           throw new Error(data.message || '上传失败');
         }
@@ -410,7 +419,9 @@
         setUploadStatus(`上传成功，已同步到 ${data.syncedBuckets || 0} 个存储：${escapeHtml(data.objectKey || '')}`, 'success');
         await loadFiles();
       } catch (error) {
-        setUploadStatus(`上传失败：${escapeHtml(error.message)}`, 'error');
+        if (error.message !== '未登录') {
+          setUploadStatus(`上传失败：${escapeHtml(error.message)}`, 'error');
+        }
       } finally {
         setBusy(false);
         fileInput.value = '';
@@ -456,8 +467,7 @@
         setEditorStatus('正在读取文件内容...');
         editorModal.classList.add('show');
 
-        const response = await fetch(`/api/oss/file?key=${encodeURIComponent(key)}`);
-        const data = await response.json();
+        const { response, data } = await requestJson(`/api/oss/file?key=${encodeURIComponent(key)}`);
         if (!response.ok || !data.success) {
           throw new Error(data.message || '读取文件内容失败');
         }
@@ -465,7 +475,9 @@
         editorText.value = data.content || '';
         setEditorStatus('');
       } catch (error) {
-        setEditorStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
+        if (error.message !== '未登录') {
+          setEditorStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
+        }
       }
     }
 
@@ -479,7 +491,7 @@
       setEditorStatus('正在保存并同步...');
 
       try {
-        const response = await fetch('/api/oss/file', {
+        const { response, data } = await requestJson('/api/oss/file', {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json'
@@ -490,7 +502,6 @@
           })
         });
 
-        const data = await response.json();
         if (!response.ok || !data.success) {
           throw new Error(data.message || '保存失败');
         }
@@ -499,7 +510,9 @@
         setUploadStatus(`已同步保存到 ${data.syncedBuckets || 0} 个存储：${escapeHtml(currentEditKey)}`, 'success');
         await loadFiles();
       } catch (error) {
-        setEditorStatus(`保存失败：${escapeHtml(error.message)}`, 'error');
+        if (error.message !== '未登录') {
+          setEditorStatus(`保存失败：${escapeHtml(error.message)}`, 'error');
+        }
       } finally {
         saveEditBtn.disabled = false;
         cancelEditBtn.disabled = false;
@@ -513,10 +526,10 @@
 
       try {
         setUploadStatus('正在删除并同步...');
-        const response = await fetch(`/api/oss/file?key=${encodeURIComponent(key)}`, {
+        const { response, data } = await requestJson(`/api/oss/file?key=${encodeURIComponent(key)}`, {
           method: 'DELETE'
         });
-        const data = await response.json();
+
         if (!response.ok || !data.success) {
           throw new Error(data.message || '删除失败');
         }
@@ -524,7 +537,19 @@
         setUploadStatus(`删除成功，已同步到 ${data.syncedBuckets || 0} 个存储：${escapeHtml(key)}`, 'success');
         await loadFiles();
       } catch (error) {
-        setUploadStatus(`删除失败：${escapeHtml(error.message)}`, 'error');
+        if (error.message !== '未登录') {
+          setUploadStatus(`删除失败：${escapeHtml(error.message)}`, 'error');
+        }
+      }
+    }
+
+    async function logout() {
+      try {
+        await fetch('/api/logout', {
+          method: 'POST'
+        });
+      } finally {
+        window.location.href = '/login.html';
       }
     }
 
@@ -543,6 +568,7 @@
 
     fileInput.addEventListener('change', uploadSelectedFile);
     refreshBtn.addEventListener('click', loadFiles);
+    logoutBtn.addEventListener('click', logout);
     saveEditBtn.addEventListener('click', saveEditor);
     cancelEditBtn.addEventListener('click', closeEditor);
     editorModal.addEventListener('click', event => {

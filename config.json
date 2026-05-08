@@ -3,6 +3,11 @@
     "host": "0.0.0.0",
     "port": 5300
   },
+  "auth": {
+    "enabled": true,
+    "username": "admin",
+    "password": "change-this-password"
+  },
   "oss": {
     "accessKeyId": "your-access-key-id",
     "accessKeySecret": "your-access-key-secret",

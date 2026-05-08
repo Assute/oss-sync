@@ -11,9 +11,13 @@ const CONFIG_PATH = path.join(ROOT_DIR, 'config.json');
 
 const config = normalizeConfig(loadConfig());
 const serverHost = config.server.host || '0.0.0.0';
-const serverPort = toPositiveInt(config.server.port, 8080);
+const serverPort = toPositiveInt(config.server.port, 5300);
 const uploadMaxBytes = toPositiveInt(config.upload.maxFileSizeMB, 100) * 1024 * 1024;
+const SESSION_COOKIE_NAME = 'oss_sync_session';
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 let discoveredBucketsCache = null;
+const sessions = new Map();
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -32,6 +36,7 @@ const MIME_TYPES = {
 
 const server = http.createServer(async (req, res) => {
   try {
+    purgeExpiredSessions();
     const base = `http://${req.headers.host || '127.0.0.1'}`;
     const requestUrl = new URL(req.url || '/', base);
 
@@ -54,6 +59,22 @@ server.listen(serverPort, serverHost, () => {
 });
 
 async function handleApi(req, res, requestUrl) {
+  if (requestUrl.pathname === '/api/login' && req.method === 'POST') {
+    return handleLogin(req, res);
+  }
+
+  if (requestUrl.pathname === '/api/logout' && req.method === 'POST') {
+    return handleLogout(req, res);
+  }
+
+  if (requestUrl.pathname === '/api/auth/status' && req.method === 'GET') {
+    return handleAuthStatus(req, res);
+  }
+
+  if (!(await ensureApiAuth(req, res))) {
+    return;
+  }
+
   if (requestUrl.pathname === '/api/health' && req.method === 'GET') {
     const buckets = await getBuckets();
     sendJson(res, 200, {
@@ -65,7 +86,8 @@ async function handleApi(req, res, requestUrl) {
         name: item.name,
         region: item.region,
         endpoint: item.endpoint
-      }))
+      })),
+      authEnabled: isAuthEnabled()
     });
     return;
   }
@@ -96,15 +118,74 @@ async function handleApi(req, res, requestUrl) {
   });
 }
 
+async function handleLogin(req, res) {
+  try {
+    if (!isAuthEnabled()) {
+      sendJson(res, 200, {
+        success: true,
+        message: '未启用登录验证'
+      });
+      return;
+    }
+
+    const body = await readJsonBody(req, 1024 * 1024);
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
+
+    if (!isValidCredential(username, password)) {
+      sendJson(res, 401, {
+        success: false,
+        message: '账号或密码错误'
+      });
+      return;
+    }
+
+    const token = createSession(username);
+    res.setHeader('Set-Cookie', createSessionCookie(token));
+    sendJson(res, 200, {
+      success: true,
+      username
+    });
+  } catch (error) {
+    sendJson(res, resolveStatusCode(error), {
+      success: false,
+      message: error.message || '登录失败'
+    });
+  }
+}
+
+function handleLogout(req, res) {
+  const token = getSessionToken(req);
+  if (token) {
+    sessions.delete(token);
+  }
+  res.setHeader('Set-Cookie', clearSessionCookie());
+  sendJson(res, 200, {
+    success: true
+  });
+}
+
+function handleAuthStatus(req, res) {
+  const session = getSession(req);
+  sendJson(res, 200, {
+    success: true,
+    authEnabled: isAuthEnabled(),
+    loggedIn: Boolean(session) || !isAuthEnabled(),
+    username: session ? session.username : ''
+  });
+}
+
 async function handleListFiles(res, requestUrl) {
   try {
     validateOssConfig();
     const maxKeys = clamp(toPositiveInt(requestUrl.searchParams.get('maxKeys'), getDefaultListMaxKeys()), 1, 1000);
     const buckets = await getBuckets();
-    const results = await Promise.all(buckets.map(async bucket => ({
-      bucket,
-      result: await ossListFiles(bucket, maxKeys)
-    })));
+    const results = await Promise.all(
+      buckets.map(async bucket => ({
+        bucket,
+        result: await ossListFiles(bucket, maxKeys)
+      }))
+    );
 
     const merged = mergeFiles(results, maxKeys);
     sendJson(res, 200, {
@@ -172,7 +253,7 @@ async function handleSaveFile(req, res) {
 
     const buckets = await getBuckets();
     const mimeType = guessMimeType(key);
-    const results = await Promise.all(
+    const statusCodes = await Promise.all(
       buckets.map(bucket => ossPutObject(bucket, key, Buffer.from(content, 'utf8'), mimeType))
     );
 
@@ -180,7 +261,7 @@ async function handleSaveFile(req, res) {
       success: true,
       key,
       syncedBuckets: buckets.length,
-      statusCodes: results,
+      statusCodes,
       urls: buckets.map(bucket => buildFileUrl(bucket, key))
     });
   } catch (error) {
@@ -200,7 +281,7 @@ async function handleDeleteFile(res, requestUrl) {
     }
 
     const buckets = await getBuckets();
-    const results = await Promise.all(
+    const statusCodes = await Promise.all(
       buckets.map(bucket => ossDeleteObject(bucket, key))
     );
 
@@ -208,7 +289,7 @@ async function handleDeleteFile(res, requestUrl) {
       success: true,
       key,
       syncedBuckets: buckets.length,
-      statusCodes: results
+      statusCodes
     });
   } catch (error) {
     sendJson(res, resolveStatusCode(error), {
@@ -234,7 +315,7 @@ async function handleUpload(req, res) {
     const buckets = await getBuckets();
     const objectKey = buildRootObjectKey(originalFilename);
     const mimeType = String(req.headers['content-type'] || '').trim() || guessMimeType(originalFilename);
-    const results = await Promise.all(
+    const statusCodes = await Promise.all(
       buckets.map(bucket => ossPutObject(bucket, objectKey, fileBuffer, mimeType))
     );
 
@@ -243,7 +324,7 @@ async function handleUpload(req, res) {
       originalFilename,
       objectKey,
       syncedBuckets: buckets.length,
-      statusCodes: results,
+      statusCodes,
       urls: buckets.map(bucket => buildFileUrl(bucket, objectKey))
     });
   } catch (error) {
@@ -259,10 +340,19 @@ async function serveStatic(req, res, requestUrl) {
     return sendText(res, 405, 'Method Not Allowed', 'text/plain; charset=utf-8');
   }
 
-  const requestPath = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname;
+  const pathname = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname;
+  const requestPath = pathname === '/login' ? '/login.html' : pathname;
   const safePath = safeJoin(PUBLIC_DIR, requestPath);
   if (!safePath) {
     return sendText(res, 403, 'Forbidden', 'text/plain; charset=utf-8');
+  }
+
+  const authed = Boolean(getSession(req)) || !isAuthEnabled();
+  if (requestPath === '/login.html' && authed) {
+    return redirect(res, '/');
+  }
+  if (requestPath !== '/login.html' && !authed) {
+    return redirect(res, '/login.html');
   }
 
   try {
@@ -316,6 +406,13 @@ function sendText(res, statusCode, text, contentType) {
   res.end(body);
 }
 
+function redirect(res, location) {
+  res.writeHead(302, {
+    Location: location
+  });
+  res.end();
+}
+
 function readRequestBuffer(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -361,6 +458,7 @@ function loadConfig() {
 function normalizeConfig(rawConfig) {
   const raw = rawConfig || {};
   const rawOss = raw.oss || {};
+  const rawAuth = raw.auth || {};
   const fallbackRegion = String(rawOss.region || '').trim();
   const fallbackEndpoint = normalizeEndpoint(rawOss.endpoint || '');
 
@@ -380,6 +478,11 @@ function normalizeConfig(rawConfig) {
     server: raw.server || {},
     upload: raw.upload || {},
     list: raw.list || {},
+    auth: {
+      enabled: rawAuth.enabled !== false,
+      username: String(rawAuth.username || '').trim(),
+      password: String(rawAuth.password || '')
+    },
     oss: {
       accessKeyId: String(rawOss.accessKeyId || '').trim(),
       accessKeySecret: String(rawOss.accessKeySecret || '').trim(),
@@ -424,6 +527,118 @@ function validateOssConfig() {
   }
 }
 
+function isAuthEnabled() {
+  return config.auth.enabled !== false && Boolean(config.auth.username) && Boolean(config.auth.password);
+}
+
+function isValidCredential(username, password) {
+  if (!isAuthEnabled()) {
+    return true;
+  }
+
+  const expectedUser = Buffer.from(config.auth.username);
+  const actualUser = Buffer.from(username);
+  const expectedPass = Buffer.from(config.auth.password);
+  const actualPass = Buffer.from(password);
+
+  return safeEqual(expectedUser, actualUser) && safeEqual(expectedPass, actualPass);
+}
+
+function safeEqual(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}
+
+function createSession(username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, {
+    username,
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+  return token;
+}
+
+function purgeExpiredSessions() {
+  const now = Date.now();
+  for (const [token, session] of sessions.entries()) {
+    if (!session || session.expiresAt <= now) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function getSession(req) {
+  if (!isAuthEnabled()) {
+    return { username: 'local' };
+  }
+
+  const token = getSessionToken(req);
+  if (!token) {
+    return null;
+  }
+
+  const session = sessions.get(token);
+  if (!session) {
+    return null;
+  }
+
+  if (session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+
+  return session;
+}
+
+function getSessionToken(req) {
+  const cookies = parseCookies(req.headers.cookie || '');
+  return cookies[SESSION_COOKIE_NAME] || '';
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  const parts = String(cookieHeader || '').split(';');
+  for (const part of parts) {
+    const index = part.indexOf('=');
+    if (index < 0) {
+      continue;
+    }
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (key) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function createSessionCookie(token) {
+  return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
+}
+
+function clearSessionCookie() {
+  return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+async function ensureApiAuth(req, res) {
+  if (!isAuthEnabled()) {
+    return true;
+  }
+
+  const session = getSession(req);
+  if (session) {
+    return true;
+  }
+
+  sendJson(res, 401, {
+    success: false,
+    message: '未登录'
+  });
+  return false;
+}
+
 async function getBuckets(forceRefresh = false) {
   validateOssConfig();
 
@@ -442,6 +657,26 @@ async function getBuckets(forceRefresh = false) {
 
   discoveredBucketsCache = buckets;
   return ensureBucketsAcceleration(discoveredBucketsCache);
+}
+
+async function ensureBucketsAcceleration(buckets) {
+  const needCheck = buckets.some(item => typeof item.accelerateEnabled !== 'boolean');
+  if (!needCheck) {
+    return buckets;
+  }
+
+  await Promise.all(buckets.map(async bucket => {
+    if (typeof bucket.accelerateEnabled === 'boolean') {
+      return;
+    }
+    try {
+      bucket.accelerateEnabled = await ossGetBucketTransferAcceleration(bucket);
+    } catch {
+      bucket.accelerateEnabled = false;
+    }
+  }));
+
+  return buckets;
 }
 
 function buildRootObjectKey(originalFilename) {
@@ -475,10 +710,15 @@ function normalizeEndpoint(endpoint) {
 
 function buildFileUrl(bucketConfig, objectKey) {
   const protocol = config.oss.secure === false ? 'http' : 'https';
-  const endpoint = bucketConfig.accelerateEnabled
-    ? getAccelerateEndpoint(bucketConfig)
-    : bucketConfig.endpoint;
+  const endpoint = bucketConfig.accelerateEnabled ? getAccelerateEndpoint(bucketConfig) : bucketConfig.endpoint;
   return `${protocol}://${bucketConfig.name}.${endpoint}/${encodeObjectKey(objectKey)}`;
+}
+
+function getAccelerateEndpoint(bucketConfig) {
+  if (bucketConfig.region && !String(bucketConfig.region).startsWith('oss-cn-')) {
+    return 'oss-accelerate-overseas.aliyuncs.com';
+  }
+  return 'oss-accelerate.aliyuncs.com';
 }
 
 function getDefaultListMaxKeys() {
@@ -518,20 +758,6 @@ function guessMimeType(fileName) {
   return mimeMap[ext] || 'application/octet-stream';
 }
 
-async function resolveBucket(bucketId) {
-  const buckets = await getBuckets();
-  const target = String(bucketId || '').trim();
-  if (!target) {
-    return buckets[0];
-  }
-
-  const found = buckets.find(item => item.id === target || item.name === target);
-  if (!found) {
-    throw new Error(`未找到 bucket: ${target}`);
-  }
-  return found;
-}
-
 async function ossListBuckets() {
   const response = await ossServiceRequest({
     method: 'GET',
@@ -558,34 +784,6 @@ async function ossListBuckets() {
       };
     })
     .filter(item => item.name && item.endpoint);
-}
-
-async function ensureBucketsAcceleration(buckets) {
-  const needHydrate = buckets.some(item => typeof item.accelerateEnabled !== 'boolean');
-  if (!needHydrate) {
-    return buckets;
-  }
-
-  await Promise.all(buckets.map(async bucket => {
-    if (typeof bucket.accelerateEnabled === 'boolean') {
-      return;
-    }
-
-    try {
-      bucket.accelerateEnabled = await ossGetBucketTransferAcceleration(bucket);
-    } catch {
-      bucket.accelerateEnabled = false;
-    }
-  }));
-
-  return buckets;
-}
-
-function getAccelerateEndpoint(bucketConfig) {
-  if (bucketConfig.region && !bucketConfig.region.startsWith('oss-cn-')) {
-    return 'oss-accelerate-overseas.aliyuncs.com';
-  }
-  return 'oss-accelerate.aliyuncs.com';
 }
 
 async function ossListFiles(bucketConfig, maxKeys) {
@@ -665,9 +863,8 @@ function mergeFiles(bucketResults, maxKeys) {
       replicaCount: item.urls.length
     }));
 
-  const sliced = files.slice(0, maxKeys);
   return {
-    files: sliced,
+    files: files.slice(0, maxKeys),
     isTruncated: hasTruncated || files.length > maxKeys
   };
 }
@@ -691,7 +888,6 @@ async function ossGetFirstAvailableObject(buckets, key) {
   if (lastError) {
     throw lastError;
   }
-
   throw new Error('未找到文件');
 }
 
@@ -724,14 +920,7 @@ async function ossGetBucketTransferAcceleration(bucketConfig) {
   const protocol = config.oss.secure === false ? 'http:' : 'https:';
   const requestUrl = `${protocol}//${bucketConfig.name}.${bucketConfig.endpoint}/?transferAcceleration`;
   const date = new Date().toUTCString();
-  const authorization = buildBucketSubresourceAuthorization(
-    bucketConfig,
-    'GET',
-    '',
-    date,
-    '',
-    'transferAcceleration'
-  );
+  const authorization = buildBucketSubresourceAuthorization(bucketConfig, 'GET', '', date, '', 'transferAcceleration');
 
   const response = await fetch(requestUrl, {
     method: 'GET',
@@ -746,15 +935,12 @@ async function ossGetBucketTransferAcceleration(bucketConfig) {
     throw createOssError(response.status, bodyBuffer);
   }
 
-  const xml = bodyBuffer.toString('utf8');
-  return extractXmlTag(xml, 'Enabled') === 'true';
+  return extractXmlTag(bodyBuffer.toString('utf8'), 'Enabled') === 'true';
 }
 
 async function ossRequest(bucketConfig, { method, key, query, body, contentType }) {
   const protocol = config.oss.secure === false ? 'http:' : 'https:';
-  const queryString = buildQueryString(query);
-  const pathName = key ? `/${encodeObjectKey(key)}` : '/';
-  const requestUrl = `${protocol}//${bucketConfig.name}.${bucketConfig.endpoint}${pathName}${queryString}`;
+  const requestUrl = `${protocol}//${bucketConfig.name}.${bucketConfig.endpoint}${key ? `/${encodeObjectKey(key)}` : '/'}${buildQueryString(query)}`;
   const date = new Date().toUTCString();
   const authorization = buildBucketAuthorization(bucketConfig, method, key || '', date, contentType || '');
 
@@ -898,8 +1084,8 @@ function resolveStatusCode(error) {
   if (typeof error.message === 'string' && error.message.includes('文件过大')) {
     return 400;
   }
-  if (typeof error.message === 'string' && error.message.includes('未找到 bucket')) {
-    return 400;
+  if (typeof error.message === 'string' && error.message.includes('未登录')) {
+    return 401;
   }
   return 500;
 }
