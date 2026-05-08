@@ -13,103 +13,24 @@
 
 ![演示图](https://pic.sl.al/gdrive/pic/2026-05-08/fileid_1R7qkNYMNSevitfeYBLKiVgTJYCewsu6C_image.png)
 
-## 仓库地址
-
-```text
-https://github.com/Assute/oss-sync.git
-```
-
-## 服务器安装命令（Ubuntu / Debian）
-
-### 1）安装基础工具
-
-```bash
-sudo apt update
-sudo apt install -y curl git
-```
-
-### 2）安装 nvm
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
-```
-
-执行完后重新加载 shell：
-
-```bash
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-```
-
-### 3）安装 Node.js 24 LTS
-
-```bash
-nvm install 24
-nvm alias default 24
-node -v
-```
-
-### 4）克隆项目
+## 快速开始
 
 ```bash
 git clone https://github.com/Assute/oss-sync.git
 cd oss-sync
-```
-
-### 5）复制配置文件
-
-```bash
 cp config.example.json config.json
-```
-
-然后编辑：
-
-```bash
-nano config.json
-```
-
-把下面两项改成你自己的：
-
-- `oss.accessKeyId`
-- `oss.accessKeySecret`
-
-## 启动项目
-
-```bash
 node server.js
 ```
 
-默认端口：
+打开：
 
 ```text
-5300
+http://127.0.0.1:5300
 ```
 
-浏览器访问：
+## 配置
 
-```text
-http://服务器IP:5300
-```
-
-## 后台运行（可选）
-
-```bash
-nohup node server.js > app.log 2>&1 &
-```
-
-查看日志：
-
-```bash
-tail -f app.log
-```
-
-## 放行端口（如果开启了防火墙）
-
-```bash
-sudo ufw allow 5300/tcp
-```
-
-## 配置文件示例
+编辑 `config.json`：
 
 ```json
 {
@@ -131,6 +52,36 @@ sudo ufw allow 5300/tcp
 }
 ```
 
+需要填写：
+
+- `oss.accessKeyId`
+- `oss.accessKeySecret`
+
+## 功能
+
+### 自动发现 Bucket
+
+程序会自动读取当前账号下的 Bucket 列表。
+
+### 多存储同步上传
+
+上传一个文件时，会同步写入所有 Bucket。
+
+### 列表聚合
+
+多个 Bucket 中的同名文件，只显示一条文件名。
+
+### 复制地址
+
+复制时会把所有存储地址一起复制，格式为一行一个地址。
+
+如果某个 Bucket 开启了传输加速，复制地址时会优先使用加速地址。
+
+### 编辑 / 删除同步
+
+- 编辑保存：同步到所有存储
+- 删除文件：同步删除所有存储中的同名文件
+
 ## 项目文件
 
 - `server.js`：零依赖后端，直接调用 OSS REST API
@@ -141,5 +92,5 @@ sudo ufw allow 5300/tcp
 ## 说明
 
 - 不需要 `npm install`
-- 如果某个 Bucket 开启了传输加速，复制地址时优先使用加速地址
+- 默认端口是 `5300`
 - 如果 Bucket 是私有读，复制出来的地址不一定可以直接打开
