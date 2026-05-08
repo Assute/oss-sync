@@ -34,8 +34,14 @@
     }
     .top-bar {
       display: flex;
-      justify-content: flex-end;
-      margin-bottom: 4px;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 0;
+    }
+    .top-text {
+      flex: 1;
+      min-width: 0;
     }
     h1, h2 {
       margin: 0;
@@ -66,8 +72,9 @@
     #refreshBtn { background: #0f766e; }
     #logoutBtn { background: #6b7280; }
     #logoutBtn {
-      padding: 10px 18px;
-      font-size: 14px;
+      padding: 8px 16px;
+      font-size: 13px;
+      border-radius: 8px;
     }
     .mini-btn {
       padding: 7px 12px;
@@ -204,10 +211,12 @@
   <div class="wrap">
     <div class="card">
       <div class="top-bar">
+        <div class="top-text">
+          <h1>阿里云 OSS 文件上传</h1>
+          <p class="desc">上传、编辑、删除都会同步到所有存储；复制会按行复制所有地址。</p>
+        </div>
         <button id="logoutBtn" type="button">退出</button>
       </div>
-      <h1>阿里云 OSS 文件上传</h1>
-      <p class="desc">上传、编辑、删除都会同步到所有存储；复制会按行复制所有地址。</p>
     </div>
 
     <div class="card">
