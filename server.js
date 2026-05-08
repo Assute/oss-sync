@@ -313,7 +313,7 @@ async function handleUpload(req, res) {
     }
 
     const buckets = await getBuckets();
-    const objectKey = buildRootObjectKey(originalFilename);
+    const objectKey = sanitizeFilename(originalFilename);
     const mimeType = String(req.headers['content-type'] || '').trim() || guessMimeType(originalFilename);
     const statusCodes = await Promise.all(
       buckets.map(bucket => ossPutObject(bucket, objectKey, fileBuffer, mimeType))
@@ -679,18 +679,9 @@ async function ensureBucketsAcceleration(buckets) {
   return buckets;
 }
 
-function buildRootObjectKey(originalFilename) {
-  const safeName = sanitizeFilename(originalFilename);
-  return `${Date.now()}-${randomString(8)}-${safeName}`;
-}
-
 function sanitizeFilename(filename) {
   const name = path.basename(filename || 'file.bin');
   return name.replace(/[^a-zA-Z0-9._-\u4e00-\u9fa5]/g, '_');
-}
-
-function randomString(length) {
-  return Math.random().toString(36).slice(2, 2 + length);
 }
 
 function normalizeObjectKey(value) {
