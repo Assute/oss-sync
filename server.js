@@ -76,7 +76,7 @@ async function handleApi(req, res, requestUrl) {
   }
 
   if (requestUrl.pathname === '/api/health' && req.method === 'GET') {
-    const buckets = await getBuckets();
+    const buckets = await getBuckets(true);
     sendJson(res, 200, {
       success: true,
       message: 'ok',
@@ -179,7 +179,7 @@ async function handleListFiles(res, requestUrl) {
   try {
     validateOssConfig();
     const maxKeys = clamp(toPositiveInt(requestUrl.searchParams.get('maxKeys'), getDefaultListMaxKeys()), 1, 1000);
-    const buckets = await getBuckets();
+    const buckets = await getBuckets(true);
     const results = await Promise.all(
       buckets.map(async bucket => ({
         bucket,
@@ -215,7 +215,7 @@ async function handleGetFile(res, requestUrl) {
       return sendJson(res, 400, { success: false, message: '该文件类型暂不支持在线编辑' });
     }
 
-    const buckets = await getBuckets();
+    const buckets = await getBuckets(true);
     const result = await ossGetFirstAvailableObject(buckets, key);
     sendJson(res, 200, {
       success: true,
@@ -251,7 +251,7 @@ async function handleSaveFile(req, res) {
       return sendJson(res, 400, { success: false, message: '缺少要保存的内容' });
     }
 
-    const buckets = await getBuckets();
+    const buckets = await getBuckets(true);
     const mimeType = guessMimeType(key);
     const statusCodes = await Promise.all(
       buckets.map(bucket => ossPutObject(bucket, key, Buffer.from(content, 'utf8'), mimeType))
@@ -280,7 +280,7 @@ async function handleDeleteFile(res, requestUrl) {
       return sendJson(res, 400, { success: false, message: '缺少文件 key' });
     }
 
-    const buckets = await getBuckets();
+    const buckets = await getBuckets(true);
     const statusCodes = await Promise.all(
       buckets.map(bucket => ossDeleteObject(bucket, key))
     );
@@ -312,7 +312,7 @@ async function handleUpload(req, res) {
       return sendJson(res, 400, { success: false, message: '上传内容为空' });
     }
 
-    const buckets = await getBuckets();
+    const buckets = await getBuckets(true);
     const objectKey = sanitizeFilename(originalFilename);
     const mimeType = String(req.headers['content-type'] || '').trim() || guessMimeType(originalFilename);
     const statusCodes = await Promise.all(
