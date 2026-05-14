@@ -70,6 +70,7 @@
     }
     #uploadBtn { background: #1677ff; }
     #refreshBtn { background: #0f766e; }
+    #refreshBucketBtn { background: #7c3aed; }
     #logoutBtn { background: #6b7280; }
     #logoutBtn {
       padding: 12px 22px;
@@ -225,6 +226,7 @@
         <div class="actions">
           <button id="uploadBtn" type="button">上传</button>
           <button id="refreshBtn" type="button">刷新</button>
+          <button id="refreshBucketBtn" type="button">刷新 Bucket</button>
         </div>
       </div>
 
@@ -277,6 +279,7 @@
     const fileInput = document.getElementById('file');
     const uploadBtn = document.getElementById('uploadBtn');
     const refreshBtn = document.getElementById('refreshBtn');
+    const refreshBucketBtn = document.getElementById('refreshBucketBtn');
     const logoutBtn = document.getElementById('logoutBtn');
     const uploadStatus = document.getElementById('uploadStatus');
     const filesStatus = document.getElementById('filesStatus');
@@ -390,6 +393,7 @@
     function setBusy(isBusy) {
       uploadBtn.disabled = isBusy;
       refreshBtn.disabled = isBusy;
+      refreshBucketBtn.disabled = isBusy;
       logoutBtn.disabled = isBusy;
     }
 
@@ -403,13 +407,42 @@
           throw new Error(data.message || '读取文件列表失败');
         }
         renderFiles(data.files || []);
+        return true;
       } catch (error) {
         if (error.message !== '未登录') {
           setFilesStatus(`读取失败：${escapeHtml(error.message)}`, 'error');
           filesBody.innerHTML = '<tr><td colspan="4" class="muted">读取失败</td></tr>';
         }
+        return false;
       } finally {
         refreshBtn.disabled = false;
+      }
+    }
+
+    async function refreshBuckets() {
+      refreshBucketBtn.disabled = true;
+      setFilesStatus('正在刷新 Bucket...');
+
+      try {
+        const { response, data } = await requestJson('/api/oss/buckets/refresh', {
+          method: 'POST'
+        });
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || '刷新 Bucket 失败');
+        }
+
+        const loaded = await loadFiles();
+        const prefix = data.source === 'config' ? '已重新读取配置 Bucket' : '已刷新 Bucket 缓存';
+        if (loaded) {
+          setFilesStatus(`${prefix}，共 ${data.bucketCount || 0} 个`, 'success');
+        }
+      } catch (error) {
+        if (error.message !== '未登录') {
+          setFilesStatus(`刷新 Bucket 失败：${escapeHtml(error.message)}`, 'error');
+        }
+      } finally {
+        refreshBucketBtn.disabled = false;
       }
     }
 
@@ -588,6 +621,7 @@
 
     fileInput.addEventListener('change', uploadSelectedFile);
     refreshBtn.addEventListener('click', loadFiles);
+    refreshBucketBtn.addEventListener('click', refreshBuckets);
     logoutBtn.addEventListener('click', logout);
     saveEditBtn.addEventListener('click', saveEditor);
     cancelEditBtn.addEventListener('click', closeEditor);

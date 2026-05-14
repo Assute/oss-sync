@@ -8,6 +8,7 @@ const { URL } = require('url');
 const ROOT_DIR = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const CONFIG_PATH = path.join(ROOT_DIR, 'config.json');
+const BUCKET_CACHE_PATH = path.join(ROOT_DIR, 'bucket-cache.json');
 
 const config = normalizeConfig(loadConfig());
 const serverHost = config.server.host || '0.0.0.0';
@@ -16,7 +17,8 @@ const uploadMaxBytes = toPositiveInt(config.upload.maxFileSizeMB, 100) * 1024 * 
 const SESSION_COOKIE_NAME = 'oss_sync_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-let discoveredBucketsCache = null;
+let discoveredBucketsCache = loadBucketCache();
+let bucketDiscoveryPromise = null;
 const sessions = new Map();
 
 const MIME_TYPES = {
@@ -56,6 +58,10 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(serverPort, serverHost, () => {
   console.log(`OSS 上传网页已启动: http://127.0.0.1:${serverPort}`);
+
+  if (!hasConfiguredBuckets() && config.oss.accessKeyId && config.oss.accessKeySecret) {
+    refreshDiscoveredBuckets().catch(() => {});
+  }
 });
 
 async function handleApi(req, res, requestUrl) {
@@ -76,7 +82,7 @@ async function handleApi(req, res, requestUrl) {
   }
 
   if (requestUrl.pathname === '/api/health' && req.method === 'GET') {
-    const buckets = await getBuckets(true);
+    const buckets = await getBuckets();
     sendJson(res, 200, {
       success: true,
       message: 'ok',
@@ -90,6 +96,10 @@ async function handleApi(req, res, requestUrl) {
       authEnabled: isAuthEnabled()
     });
     return;
+  }
+
+  if (requestUrl.pathname === '/api/oss/buckets/refresh' && req.method === 'POST') {
+    return handleRefreshBuckets(res);
   }
 
   if (requestUrl.pathname === '/api/oss/files' && req.method === 'GET') {
@@ -175,11 +185,34 @@ function handleAuthStatus(req, res) {
   });
 }
 
+async function handleRefreshBuckets(res) {
+  try {
+    validateOssConfig();
+    const buckets = await getBuckets(true);
+    sendJson(res, 200, {
+      success: true,
+      source: hasConfiguredBuckets() ? 'config' : 'discovery-cache',
+      bucketCount: buckets.length,
+      buckets: buckets.map(item => ({
+        id: item.id,
+        name: item.name,
+        region: item.region,
+        endpoint: item.endpoint
+      }))
+    });
+  } catch (error) {
+    sendJson(res, resolveStatusCode(error), {
+      success: false,
+      message: error.message || '刷新 Bucket 失败'
+    });
+  }
+}
+
 async function handleListFiles(res, requestUrl) {
   try {
     validateOssConfig();
     const maxKeys = clamp(toPositiveInt(requestUrl.searchParams.get('maxKeys'), getDefaultListMaxKeys()), 1, 1000);
-    const buckets = await getBuckets(true);
+    const buckets = await getBuckets();
     const results = await Promise.all(
       buckets.map(async bucket => ({
         bucket,
@@ -215,7 +248,7 @@ async function handleGetFile(res, requestUrl) {
       return sendJson(res, 400, { success: false, message: '该文件类型暂不支持在线编辑' });
     }
 
-    const buckets = await getBuckets(true);
+    const buckets = await getBuckets();
     const result = await ossGetFirstAvailableObject(buckets, key);
     sendJson(res, 200, {
       success: true,
@@ -251,7 +284,7 @@ async function handleSaveFile(req, res) {
       return sendJson(res, 400, { success: false, message: '缺少要保存的内容' });
     }
 
-    const buckets = await getBuckets(true);
+    const buckets = await getBuckets();
     const mimeType = guessMimeType(key);
     const statusCodes = await Promise.all(
       buckets.map(bucket => ossPutObject(bucket, key, Buffer.from(content, 'utf8'), mimeType))
@@ -280,7 +313,7 @@ async function handleDeleteFile(res, requestUrl) {
       return sendJson(res, 400, { success: false, message: '缺少文件 key' });
     }
 
-    const buckets = await getBuckets(true);
+    const buckets = await getBuckets();
     const statusCodes = await Promise.all(
       buckets.map(bucket => ossDeleteObject(bucket, key))
     );
@@ -312,7 +345,7 @@ async function handleUpload(req, res) {
       return sendJson(res, 400, { success: false, message: '上传内容为空' });
     }
 
-    const buckets = await getBuckets(true);
+    const buckets = await getBuckets();
     const objectKey = sanitizeFilename(originalFilename);
     const mimeType = String(req.headers['content-type'] || '').trim() || guessMimeType(originalFilename);
     const statusCodes = await Promise.all(
@@ -455,6 +488,46 @@ function loadConfig() {
   return JSON.parse(raw);
 }
 
+function loadBucketCache() {
+  if (!fs.existsSync(BUCKET_CACHE_PATH)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(BUCKET_CACHE_PATH, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    const bucketList = Array.isArray(parsed) ? parsed : Array.isArray(parsed && parsed.buckets) ? parsed.buckets : [];
+    const buckets = bucketList
+      .map((item, index) => normalizeBucket(item, index, '', ''))
+      .filter(item => item.name && item.endpoint);
+
+    return buckets.length ? buckets : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveBucketCache(buckets) {
+  try {
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      buckets: (Array.isArray(buckets) ? buckets : []).map(bucket => ({
+        id: bucket.id,
+        name: bucket.name,
+        region: bucket.region,
+        endpoint: bucket.endpoint,
+        accelerateEnabled: typeof bucket.accelerateEnabled === 'boolean' ? bucket.accelerateEnabled : undefined
+      }))
+    };
+
+    fs.writeFileSync(BUCKET_CACHE_PATH, JSON.stringify(payload, null, 2), 'utf8');
+  } catch {}
+}
+
+function hasConfiguredBuckets() {
+  return Array.isArray(config.oss.buckets) && config.oss.buckets.length > 0;
+}
+
 function normalizeConfig(rawConfig) {
   const raw = rawConfig || {};
   const rawOss = raw.oss || {};
@@ -502,7 +575,8 @@ function normalizeBucket(item, index, fallbackRegion, fallbackEndpoint) {
       id: name || `bucket-${index + 1}`,
       name,
       region: fallbackRegion,
-      endpoint: fallbackEndpoint
+      endpoint: fallbackEndpoint,
+      accelerateEnabled: undefined
     };
   }
 
@@ -510,11 +584,13 @@ function normalizeBucket(item, index, fallbackRegion, fallbackEndpoint) {
   const name = String(bucket.name || bucket.bucket || '').trim();
   const region = String(bucket.region || fallbackRegion || '').trim();
   const endpoint = normalizeEndpoint(bucket.endpoint || fallbackEndpoint || '');
+  const accelerateEnabled = typeof bucket.accelerateEnabled === 'boolean' ? bucket.accelerateEnabled : undefined;
   return {
     id: String(bucket.id || name || `bucket-${index + 1}`).trim(),
     name,
     region,
-    endpoint
+    endpoint,
+    accelerateEnabled
   };
 }
 
@@ -642,21 +718,43 @@ async function ensureApiAuth(req, res) {
 async function getBuckets(forceRefresh = false) {
   validateOssConfig();
 
-  if (Array.isArray(config.oss.buckets) && config.oss.buckets.length > 0) {
+  if (hasConfiguredBuckets()) {
     return ensureBucketsAcceleration(config.oss.buckets);
   }
 
-  if (!forceRefresh && Array.isArray(discoveredBucketsCache) && discoveredBucketsCache.length > 0) {
+  if (forceRefresh) {
+    return refreshDiscoveredBuckets();
+  }
+
+  if (Array.isArray(discoveredBucketsCache) && discoveredBucketsCache.length > 0) {
     return ensureBucketsAcceleration(discoveredBucketsCache);
   }
 
-  const buckets = await ossListBuckets();
-  if (!buckets.length) {
-    throw new Error('未自动获取到任何 Bucket');
+  return refreshDiscoveredBuckets();
+}
+
+async function refreshDiscoveredBuckets() {
+  if (bucketDiscoveryPromise) {
+    return bucketDiscoveryPromise;
   }
 
-  discoveredBucketsCache = buckets;
-  return ensureBucketsAcceleration(discoveredBucketsCache);
+  bucketDiscoveryPromise = (async () => {
+    const buckets = await ossListBuckets();
+    if (!buckets.length) {
+      throw new Error('未自动获取到任何 Bucket');
+    }
+
+    discoveredBucketsCache = buckets;
+    await ensureBucketsAcceleration(discoveredBucketsCache);
+    saveBucketCache(discoveredBucketsCache);
+    return discoveredBucketsCache;
+  })();
+
+  try {
+    return await bucketDiscoveryPromise;
+  } finally {
+    bucketDiscoveryPromise = null;
+  }
 }
 
 async function ensureBucketsAcceleration(buckets) {
@@ -675,6 +773,10 @@ async function ensureBucketsAcceleration(buckets) {
       bucket.accelerateEnabled = false;
     }
   }));
+
+  if (buckets === discoveredBucketsCache) {
+    saveBucketCache(discoveredBucketsCache);
+  }
 
   return buckets;
 }
